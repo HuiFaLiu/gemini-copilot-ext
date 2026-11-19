@@ -1,7 +1,8 @@
 /**
  * Gemini Copilot - Feature: Real-time Quota Monitor Capsule (P0)
  * 
- * Adaptive bottom-left pill, upward-expanding details card, tri-color threshold alerts,
+ * Freely draggable floating pill with position persistence,
+ * adaptive 4-quadrant popover details card, tri-color threshold alerts,
  * Alt+U toggle, and hybrid refresh engine (events + smart polling + iframe degraded fallback).
  */
 import { QuotaData, ExtensionSettings } from '../../types';
@@ -21,12 +22,27 @@ export class QuotaMonitor {
   private pollingTimer: number | null = null;
   private isVisible: boolean = true;
 
+  // Draggable positioning state
+  private position: { x: number; y: number } = { x: 24, y: Math.max(20, window.innerHeight - 90) };
+  private isDragging: boolean = false;
+  private dragMoved: boolean = false;
+  private justDragged: boolean = false;
+
   async init(): Promise<void> {
     this.settings = await StorageManager.getSettings();
     this.isVisible = this.settings.pillVisible;
 
     // Load initial cached quota
     this.quota = await StorageManager.getCachedQuota();
+
+    // Load saved custom pill position
+    const savedPos = await StorageManager.getPillPosition();
+    if (savedPos && typeof savedPos.x === 'number' && typeof savedPos.y === 'number') {
+      this.position = savedPos;
+    } else {
+      // Default: bottom left, safe distance above avatar and page bottom
+      this.position = { x: 24, y: Math.max(20, window.innerHeight - 90) };
+    }
 
     this.mount();
     this.bindEvents();
@@ -44,6 +60,9 @@ export class QuotaMonitor {
     this.host = host;
     this.shadow = root;
 
+    // Apply initial position
+    this.applyPosition();
+
     // Theme synchronization
     GeminiAdapter.observeTheme((theme) => {
       if (this.host) {
@@ -51,7 +70,37 @@ export class QuotaMonitor {
       }
     });
 
+    // Window resize clamping
+    window.addEventListener('resize', () => {
+      this.applyPosition();
+    });
+
     this.render();
+  }
+
+  private applyPosition(): void {
+    if (!this.host) return;
+
+    const pillWidth = 135;
+    const pillHeight = 36;
+    const maxX = Math.max(10, window.innerWidth - pillWidth - 10);
+    const maxY = Math.max(10, window.innerHeight - pillHeight - 10);
+
+    const clampedX = Math.max(10, Math.min(maxX, this.position.x));
+    const clampedY = Math.max(10, Math.min(maxY, this.position.y));
+
+    this.position = { x: clampedX, y: clampedY };
+    this.host.style.left = `${clampedX}px`;
+    this.host.style.top = `${clampedY}px`;
+    this.host.style.bottom = 'auto';
+    this.host.style.right = 'auto';
+
+    // Adapt popover card direction based on quadrant
+    const isLowerHalf = clampedY > window.innerHeight / 2;
+    const isRightHalf = clampedX > window.innerWidth / 2;
+
+    this.host.setAttribute('data-v-align', isLowerHalf ? 'up' : 'down');
+    this.host.setAttribute('data-h-align', isRightHalf ? 'right' : 'left');
   }
 
   private bindEvents(): void {
@@ -188,10 +237,11 @@ export class QuotaMonitor {
 
     root.innerHTML = `
       <div class="quota-container">
-        <!-- Main Bottom-Left Capsule Pill -->
+        <!-- Freely Draggable Capsule Pill -->
         <button class="quota-pill ${statusClass} ${this.isRefreshing ? 'refreshing' : ''}" 
                 type="button"
-                title="Gemini 限额用量: ${pct}% (点击向上展开明细卡片，快捷键 Alt+U 显隐)">
+                title="Gemini 限额用量: ${pct}% (按住可自由拖拽位置，点击展开明细，快捷键 Alt+U 显隐)">
+          <span class="pill-drag-handle" title="拖拽调整位置">⋮⋮</span>
           <span class="pill-sparkle">✦</span>
           <span class="pill-text">${pct}% 用量</span>
           <div class="pill-bar-track">
@@ -200,7 +250,7 @@ export class QuotaMonitor {
           ${this.isRefreshing ? '<span class="pill-spinner"></span>' : ''}
         </button>
 
-        <!-- Upward-Expanding Details Card -->
+        <!-- Adaptive Popover Details Card -->
         ${
           this.isCardOpen
             ? `
@@ -276,7 +326,7 @@ export class QuotaMonitor {
                 官方用量页 &rarr;
               </a>
             </div>
-            <div class="shortcut-tip">提示：按 <code>Alt + U</code> 可随时隐藏此胶囊</div>
+            <div class="shortcut-tip">提示：按住胶囊可拖拽，按 <code>Alt + U</code> 可随时隐藏</div>
           </div>
         `
             : ''
@@ -288,16 +338,24 @@ export class QuotaMonitor {
   }
 
   private bindComponentEvents(root: HTMLElement): void {
-    // 1. Click pill to toggle details card
-    const pill = root.querySelector('.quota-pill');
-    pill?.addEventListener('click', (e) => {
+    const pill = root.querySelector<HTMLElement>('.quota-pill');
+    if (!pill) return;
+
+    // 1. Setup free mouse dragging
+    this.setupDraggable(pill);
+
+    // 2. Click pill to toggle details card (only if not dragging)
+    pill.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
+      if (this.justDragged || this.isDragging) return;
+
       this.isCardOpen = !this.isCardOpen;
+      this.applyPosition();
       this.render();
     });
 
-    // 2. Card close button
+    // 3. Card close button
     const closeBtn = root.querySelector('.card-close-btn');
     closeBtn?.addEventListener('click', (e) => {
       e.preventDefault();
@@ -306,7 +364,7 @@ export class QuotaMonitor {
       this.render();
     });
 
-    // 3. Manual Refresh Button
+    // 4. Manual Refresh Button
     const refreshBtn = root.querySelector('.refresh-btn');
     refreshBtn?.addEventListener('click', (e) => {
       e.preventDefault();
@@ -314,7 +372,7 @@ export class QuotaMonitor {
       this.refreshQuota(true);
     });
 
-    // 4. Click outside to dismiss card (using small delay to ignore initial trigger)
+    // 5. Click outside to dismiss card
     if (this.isCardOpen) {
       window.setTimeout(() => {
         const onDocClick = (e: MouseEvent) => {
@@ -329,6 +387,71 @@ export class QuotaMonitor {
         document.addEventListener('click', onDocClick);
       }, 50);
     }
+  }
+
+  /**
+   * Enables smooth mouse drag and drop with position persistence
+   */
+  private setupDraggable(pill: HTMLElement): void {
+    let startX = 0;
+    let startY = 0;
+    let initialPos = { x: 0, y: 0 };
+
+    const onMouseDown = (e: MouseEvent) => {
+      // Only drag on primary left button
+      if (e.button !== 0) return;
+
+      startX = e.clientX;
+      startY = e.clientY;
+      initialPos = { ...this.position };
+      this.dragMoved = false;
+
+      const onMouseMove = (moveEvent: MouseEvent) => {
+        const dx = moveEvent.clientX - startX;
+        const dy = moveEvent.clientY - startY;
+
+        if (!this.dragMoved && Math.hypot(dx, dy) > 4) {
+          this.dragMoved = true;
+          this.isDragging = true;
+          this.host?.classList.add('is-dragging');
+          // Close card while dragging for optimal smoothness
+          if (this.isCardOpen) {
+            this.isCardOpen = false;
+            this.render();
+          }
+        }
+
+        if (this.isDragging) {
+          this.position = {
+            x: initialPos.x + dx,
+            y: initialPos.y + dy
+          };
+          this.applyPosition();
+        }
+      };
+
+      const onMouseUp = async () => {
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+
+        if (this.isDragging) {
+          this.isDragging = false;
+          this.host?.classList.remove('is-dragging');
+          this.justDragged = true;
+          window.setTimeout(() => {
+            this.justDragged = false;
+          }, 120);
+
+          // Save final position to storage
+          await StorageManager.savePillPosition(this.position);
+        }
+      };
+
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp);
+    };
+
+    pill.addEventListener('mousedown', onMouseDown);
   }
 
   private escapeHtml(str: string): string {
@@ -362,13 +485,10 @@ export class QuotaMonitor {
 
         display: block !important;
         position: fixed !important;
-        bottom: 20px !important;
-        left: 20px !important;
-        top: auto !important;
-        right: auto !important;
         z-index: 99999 !important;
         pointer-events: auto !important;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans SC", sans-serif;
+        touch-action: none;
       }
 
       :host([data-theme="dark"]) {
@@ -403,16 +523,16 @@ export class QuotaMonitor {
         display: inline-flex;
       }
 
-      /* Capsule Pill */
+      /* Capsule Pill with Grab Cursor */
       .quota-pill {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
-        padding: 6px 13px;
+        gap: 5px;
+        padding: 6px 12px;
         border-radius: 20px;
         font-size: 12.5px;
         font-weight: 600;
-        cursor: pointer !important;
+        cursor: grab !important;
         background: var(--paper);
         border: 1px solid var(--hair);
         color: var(--ink);
@@ -425,6 +545,19 @@ export class QuotaMonitor {
       .quota-pill:hover {
         transform: translateY(-2px);
         box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+      }
+      .quota-pill:active, :host(.is-dragging) .quota-pill {
+        cursor: grabbing !important;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22) !important;
+        transform: scale(1.02);
+      }
+
+      .pill-drag-handle {
+        font-size: 11px;
+        color: var(--mute);
+        opacity: 0.6;
+        letter-spacing: -1px;
+        margin-right: 1px;
       }
 
       .quota-pill.status-ok {
@@ -476,13 +609,9 @@ export class QuotaMonitor {
         animation: spin 0.6s linear infinite;
       }
 
-      /* Details Card - Expands Upwards from bottom */
+      /* Adaptive Details Card */
       .quota-card {
         position: absolute;
-        bottom: calc(100% + 10px);
-        left: 0;
-        top: auto;
-        right: auto;
         width: 310px;
         max-height: 80vh;
         background: var(--bg-panel);
@@ -492,18 +621,39 @@ export class QuotaMonitor {
         backdrop-filter: blur(12px);
         z-index: 100000;
         overflow: hidden;
-        animation: slideUpFadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+        animation: cardPopIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
         pointer-events: auto !important;
       }
 
-      @keyframes slideUpFadeIn {
+      /* Upward (when pill is in lower half) */
+      :host([data-v-align="up"]) .quota-card {
+        bottom: calc(100% + 10px);
+        top: auto;
+      }
+      /* Downward (when pill is in upper half) */
+      :host([data-v-align="down"]) .quota-card {
+        top: calc(100% + 10px);
+        bottom: auto;
+      }
+      /* Left-aligned (when pill is on left half) */
+      :host([data-h-align="left"]) .quota-card {
+        left: 0;
+        right: auto;
+      }
+      /* Right-aligned (when pill is on right half) */
+      :host([data-h-align="right"]) .quota-card {
+        right: 0;
+        left: auto;
+      }
+
+      @keyframes cardPopIn {
         from {
           opacity: 0;
-          transform: translateY(8px);
+          transform: scale(0.96);
         }
         to {
           opacity: 1;
-          transform: translateY(0);
+          transform: scale(1);
         }
       }
 

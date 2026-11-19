@@ -6,6 +6,7 @@ import { ExtensionSettings, DEFAULT_SETTINGS, QuotaData } from '../types';
 const STORAGE_KEYS = {
   SETTINGS: 'gemini_copilot_settings',
   QUOTA: 'gemini_copilot_quota',
+  PILL_POSITION: 'gemini_copilot_pill_pos',
   DRAFTS_PREFIX: 'gemini_copilot_draft_',
   STARS_PREFIX: 'gemini_copilot_stars_'
 };
@@ -71,6 +72,27 @@ export class StorageManager {
    */
   static async saveQuota(quota: QuotaData): Promise<void> {
     await chrome.storage.local.set({ [STORAGE_KEYS.QUOTA]: quota });
+  }
+
+  /**
+   * Retrieves saved floating pill coordinates
+   */
+  static async getPillPosition(): Promise<{ x: number; y: number } | null> {
+    try {
+      const result = await chrome.storage.local.get(STORAGE_KEYS.PILL_POSITION);
+      return result[STORAGE_KEYS.PILL_POSITION] || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Persists floating pill coordinates
+   */
+  static async savePillPosition(pos: { x: number; y: number }): Promise<void> {
+    try {
+      await chrome.storage.local.set({ [STORAGE_KEYS.PILL_POSITION]: pos });
+    } catch {}
   }
 
   /**
