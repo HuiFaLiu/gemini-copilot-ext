@@ -10,6 +10,7 @@
 import { QuotaData, ExtensionSettings, DEFAULT_SETTINGS, MessageType, MessageResponse } from '../types';
 import { StorageManager } from '../core/storage';
 import { MessageBus } from '../core/bus';
+import { parseUsageText } from '../features/quota/parser';
 
 // In-memory state for Service Worker lifecycle
 let isFetchingQuota = false;
@@ -44,53 +45,6 @@ function updateBadge(quota: QuotaData | null) {
   } else {
     chrome.action.setBadgeBackgroundColor({ color: '#DC2626' }); // Red
   }
-}
-
-/**
- * Parse usage data from raw HTML or response string from gemini.google.com/usage
- */
-function parseUsagePayload(html: string): Partial<QuotaData> {
-  const result: Partial<QuotaData> = {
-    percentage: 0,
-    periodType: 'current'
-  };
-
-  try {
-    // 1. Check for standard percentage patterns like "45% used" or "已使用 45%"
-    const pctMatch = html.match(/(\d{1,3}(?:\.\d+)?)\s*%\s*(?:used|已使用|of limit|限额)/i) ||
-                     html.match(/(?:used|已使用|当前使用率)[:：\s]*(\d{1,3}(?:\.\d+)?)\s*%/i) ||
-                     html.match(/"percentage"\s*:\s*(\d+(?:\.\d+)?)/i);
-    if (pctMatch && pctMatch[1]) {
-      const val = parseFloat(pctMatch[1]);
-      if (!isNaN(val) && val >= 0 && val <= 100) {
-        result.percentage = val;
-      }
-    }
-
-    // 2. Check for token/unit usage like "450 / 1000" or "450 of 1000 requests"
-    const ratioMatch = html.match(/(\d+[\d,.]*)\s*(?:\/|of|共)\s*(\d+[\d,.]*)\s*(?:requests|queries|tokens|次|次提问)/i);
-    if (ratioMatch && ratioMatch[1] && ratioMatch[2]) {
-      const used = parseFloat(ratioMatch[1].replace(/,/g, ''));
-      const total = parseFloat(ratioMatch[2].replace(/,/g, ''));
-      if (!isNaN(used) && !isNaN(total) && total > 0) {
-        result.usedUnits = used;
-        result.totalUnits = total;
-        if (!result.percentage) {
-          result.percentage = Math.min(100, Math.round((used / total) * 100));
-        }
-      }
-    }
-
-    // 3. Check for reset countdown / time text
-    const resetMatch = html.match(/(?:Resets? in|重置时间|倒计时|将于)[:：\s]*([^<>\n"]{4,40})/i);
-    if (resetMatch && resetMatch[1]) {
-      result.resetTimeText = resetMatch[1].trim();
-    }
-  } catch (err) {
-    console.warn('[Gemini Copilot SW] Error parsing usage payload:', err);
-  }
-
-  return result;
 }
 
 /**
@@ -162,35 +116,58 @@ async function fetchQuota(force = false): Promise<QuotaData> {
       }
 
       const text = await response.text();
-      const parsed = parseUsagePayload(text);
+      const parsed = parseUsageText(text);
 
       // Reset backoff on success
       backoffIndex = 0;
       backoffUntilTimestamp = 0;
 
-      const percentage = parsed.percentage ?? 0;
-      let status: QuotaData['status'] = 'ok';
-      if (percentage >= 90) status = 'danger';
-      else if (percentage >= 70) status = 'warning';
+      // If direct fetch parsed non-zero percentage from SSR or payload
+      if (parsed.percentage !== undefined && parsed.percentage > 0) {
+        const percentage = parsed.percentage;
+        let status: QuotaData['status'] = parsed.status || 'ok';
+        if (percentage >= 90) status = 'danger';
+        else if (percentage >= 70) status = 'warning';
 
-      const quotaData: QuotaData = {
-        percentage,
-        usedUnits: parsed.usedUnits,
-        totalUnits: parsed.totalUnits,
+        const quotaData: QuotaData = {
+          percentage,
+          usedPercentage: percentage,
+          remainingPercentage: Math.max(0, 100 - percentage),
+          resetTimeText: parsed.resetTimeText || '今日结束前重置',
+          weeklyPercentage: parsed.weeklyPercentage,
+          weeklyResetTimeText: parsed.weeklyResetTimeText,
+          periodType: 'current',
+          status,
+          lastUpdated: Date.now()
+        };
+
+        await StorageManager.saveQuota(quotaData);
+        updateBadge(quotaData);
+        await MessageBus.broadcastToGeminiTabs({ type: 'QUOTA_UPDATED', data: quotaData });
+        return quotaData;
+      }
+
+      // If direct fetch couldn't extract rendered percentage (SPA client-side rendered),
+      // prefer existing cached quota rather than overwriting with 0!
+      const cached = await StorageManager.getCachedQuota();
+      if (cached && cached.percentage > 0) {
+        updateBadge(cached);
+        return cached;
+      }
+
+      // Default fallback
+      const defaultQuota: QuotaData = {
+        percentage: parsed.percentage ?? 0,
         resetTimeText: parsed.resetTimeText || '今日结束前重置',
+        weeklyPercentage: parsed.weeklyPercentage,
+        weeklyResetTimeText: parsed.weeklyResetTimeText,
         periodType: 'current',
-        status,
+        status: 'ok',
         lastUpdated: Date.now()
       };
-
-      // Persist to storage & update extension icon badge
-      await StorageManager.saveQuota(quotaData);
-      updateBadge(quotaData);
-
-      // Broadcast to all active Gemini tabs
-      await MessageBus.broadcastToGeminiTabs({ type: 'QUOTA_UPDATED', data: quotaData });
-
-      return quotaData;
+      await StorageManager.saveQuota(defaultQuota);
+      updateBadge(defaultQuota);
+      return defaultQuota;
     } catch (err: any) {
       console.warn('[Gemini Copilot SW] Quota fetch failed:', err);
       const cached = await StorageManager.getCachedQuota();
@@ -273,6 +250,12 @@ MessageBus.onMessage(async (msg: MessageType, sender): Promise<MessageResponse> 
     // Model reply completed, refresh quota immediately
     const quota = await fetchQuota(true);
     return { success: true, data: quota };
+  }
+
+  if (msg.type === 'QUOTA_UPDATED' && msg.data) {
+    await StorageManager.saveQuota(msg.data);
+    updateBadge(msg.data);
+    return { success: true };
   }
 
   if (msg.type === 'GET_SETTINGS') {

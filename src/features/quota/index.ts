@@ -2,13 +2,14 @@
  * Gemini Copilot - Feature: Real-time Quota Monitor Capsule (P0)
  * 
  * Adaptive top-bar pill, tri-color threshold alerts, details card,
- * Alt+U toggle, and hybrid refresh engine (events + smart polling).
+ * Alt+U toggle, and hybrid refresh engine (events + smart polling + iframe degraded fallback).
  */
 import { QuotaData, ExtensionSettings } from '../../types';
 import { GeminiAdapter } from '../../sites/gemini';
 import { LifecycleManager } from '../../core/lifecycle';
 import { StorageManager } from '../../core/storage';
 import { MessageBus } from '../../core/bus';
+import { IframeQuotaFetcher } from './iframe-fetcher';
 
 export class QuotaMonitor {
   private host: HTMLElement | null = null;
@@ -43,9 +44,6 @@ export class QuotaMonitor {
     this.host = host;
     this.shadow = root;
 
-    // Reposition inside Gemini header if available, or stay fixed top-right
-    this.repositionHost();
-
     // Theme synchronization
     GeminiAdapter.observeTheme((theme) => {
       if (this.host) {
@@ -53,23 +51,7 @@ export class QuotaMonitor {
       }
     });
 
-    // Sidebar resize synchronization to prevent overlapping
-    GeminiAdapter.observeSidebar((width) => {
-      if (this.host) {
-        this.host.style.setProperty('--sidebar-offset', `${width}px`);
-      }
-    });
-
     this.render();
-  }
-
-  private repositionHost(): void {
-    const topBar = GeminiAdapter.getTopBar();
-    if (topBar && this.host && !topBar.contains(this.host)) {
-      // Place next to top bar actions if feasible
-      topBar.appendChild(this.host);
-      this.host.classList.add('in-header');
-    }
   }
 
   private bindEvents(): void {
@@ -99,7 +81,7 @@ export class QuotaMonitor {
       }
     });
 
-    // 4. Listen for Quota updates broadcast from background
+    // 4. Listen for Quota updates broadcast from background or other tabs
     MessageBus.onMessage((msg) => {
       if (msg.type === 'QUOTA_UPDATED') {
         this.quota = msg.data;
@@ -142,15 +124,34 @@ export class QuotaMonitor {
     this.render();
 
     try {
+      // 1. Query background service worker
       const res = await MessageBus.sendToBackground<QuotaData>({
         type: 'GET_QUOTA',
         force
       });
-      if (res.success && res.data) {
+
+      if (res.success && res.data && res.data.percentage > 0) {
         this.quota = res.data;
+      } else {
+        // 2. If background returned 0% or failed (due to SPA client-side rendering),
+        // execute degraded hidden iframe channel to extract real rendered DOM cards!
+        const iframeQuota = await IframeQuotaFetcher.fetch();
+        if (iframeQuota && iframeQuota.percentage !== undefined) {
+          this.quota = iframeQuota;
+        } else if (res.data) {
+          this.quota = res.data;
+        }
       }
     } catch (err) {
-      console.warn('[Gemini Copilot Quota] Failed to refresh quota:', err);
+      console.warn('[Gemini Copilot Quota] Background refresh failed, trying iframe fallback:', err);
+      try {
+        const iframeQuota = await IframeQuotaFetcher.fetch();
+        if (iframeQuota) {
+          this.quota = iframeQuota;
+        }
+      } catch (e) {
+        // Ignore fallback errors
+      }
     } finally {
       this.isRefreshing = false;
       this.render();
@@ -189,11 +190,12 @@ export class QuotaMonitor {
       <div class="quota-container">
         <!-- Main Top Bar Capsule Pill -->
         <button class="quota-pill ${statusClass} ${this.isRefreshing ? 'refreshing' : ''}" 
-                title="Gemini 限额用量: ${pct}% (点击展开明细，快捷键 Alt+U 显隐)">
+                type="button"
+                title="Gemini 限额用量: ${pct}% (点击展开明细卡片，快捷键 Alt+U 切换显隐)">
           <span class="pill-sparkle">✦</span>
           <span class="pill-text">${pct}% 用量</span>
           <div class="pill-bar-track">
-            <div class="pill-bar-fill ${statusClass}" style="width: ${Math.min(100, Math.max(2, pct))}%;"></div>
+            <div class="pill-bar-fill ${statusClass}" style="width: ${Math.min(100, Math.max(3, pct))}%;"></div>
           </div>
           ${this.isRefreshing ? '<span class="pill-spinner"></span>' : ''}
         </button>
@@ -206,9 +208,9 @@ export class QuotaMonitor {
             <div class="card-header">
               <div class="card-title-group">
                 <span class="card-icon">⚡</span>
-                <span class="card-title">Gemini 模型用量限额</span>
+                <span class="card-title">Gemini 限额用量明细</span>
               </div>
-              <button class="card-close-btn">&times;</button>
+              <button class="card-close-btn" type="button" title="关闭">&times;</button>
             </div>
 
             <div class="card-body">
@@ -216,9 +218,9 @@ export class QuotaMonitor {
               <div class="metric-row">
                 <div class="metric-num ${statusClass}">${pct}%</div>
                 <div class="metric-meta">
-                  <span class="metric-label">当前周期消耗</span>
+                  <span class="metric-label">当前用量消耗</span>
                   <span class="metric-status-badge ${statusClass}">
-                    ${status === 'danger' ? '严重不足' : status === 'warning' ? '接近上限' : status === 'rate_limited' ? '限流中' : '充裕可用'}
+                    ${status === 'danger' ? '严重不足' : status === 'warning' ? '接近上限' : status === 'rate_limited' ? '限流中' : '额度充裕'}
                   </span>
                 </div>
               </div>
@@ -230,20 +232,24 @@ export class QuotaMonitor {
 
               <!-- Details Stats Grid -->
               <div class="stats-grid">
+                <div class="stat-item">
+                  <span class="stat-label">今日重置</span>
+                  <span class="stat-value">${this.quota?.resetTimeText || '周期自动重置'}</span>
+                </div>
                 ${
-                  this.quota?.usedUnits !== undefined && this.quota?.totalUnits !== undefined
+                  this.quota?.weeklyPercentage !== undefined
                     ? `
                   <div class="stat-item">
-                    <span class="stat-label">已用 / 限额</span>
-                    <span class="stat-value">${this.quota.usedUnits} / ${this.quota.totalUnits}</span>
+                    <span class="stat-label">每周限额</span>
+                    <span class="stat-value">已使用 ${this.quota.weeklyPercentage}%</span>
+                  </div>
+                  <div class="stat-item">
+                    <span class="stat-label">周限额重置</span>
+                    <span class="stat-value">${this.quota.weeklyResetTimeText || '每周定时重置'}</span>
                   </div>
                 `
                     : ''
                 }
-                <div class="stat-item">
-                  <span class="stat-label">重置状态</span>
-                  <span class="stat-value">${this.quota?.resetTimeText || '周期自动重置'}</span>
-                </div>
                 <div class="stat-item">
                   <span class="stat-label">上次更新</span>
                   <span class="stat-value">${this.quota?.lastUpdated ? new Date(this.quota.lastUpdated).toLocaleTimeString() : '刚刚'}</span>
@@ -262,12 +268,12 @@ export class QuotaMonitor {
             </div>
 
             <div class="card-footer">
-              <button class="refresh-btn ${this.isRefreshing ? 'disabled' : ''}">
+              <button class="refresh-btn ${this.isRefreshing ? 'disabled' : ''}" type="button">
                 <span class="refresh-icon ${this.isRefreshing ? 'spin' : ''}">↻</span>
                 <span>${this.isRefreshing ? '正在同步...' : '立即刷新'}</span>
               </button>
               <a href="https://gemini.google.com/usage" target="_blank" class="link-usage" rel="noopener noreferrer">
-                官方账单 &rarr;
+                官方用量页 &rarr;
               </a>
             </div>
             <div class="shortcut-tip">提示：按 <code>Alt + U</code> 可随时隐藏此胶囊</div>
@@ -285,6 +291,7 @@ export class QuotaMonitor {
     // 1. Click pill to toggle details card
     const pill = root.querySelector('.quota-pill');
     pill?.addEventListener('click', (e) => {
+      e.preventDefault();
       e.stopPropagation();
       this.isCardOpen = !this.isCardOpen;
       this.render();
@@ -293,6 +300,7 @@ export class QuotaMonitor {
     // 2. Card close button
     const closeBtn = root.querySelector('.card-close-btn');
     closeBtn?.addEventListener('click', (e) => {
+      e.preventDefault();
       e.stopPropagation();
       this.isCardOpen = false;
       this.render();
@@ -301,20 +309,25 @@ export class QuotaMonitor {
     // 3. Manual Refresh Button
     const refreshBtn = root.querySelector('.refresh-btn');
     refreshBtn?.addEventListener('click', (e) => {
+      e.preventDefault();
       e.stopPropagation();
       this.refreshQuota(true);
     });
 
-    // 4. Click outside to dismiss card
-    const onDocClick = (e: MouseEvent) => {
-      if (this.isCardOpen && this.host && !e.composedPath().includes(this.host)) {
-        this.isCardOpen = false;
-        this.render();
-        document.removeEventListener('click', onDocClick);
-      }
-    };
+    // 4. Click outside to dismiss card (using small delay to ignore initial trigger)
     if (this.isCardOpen) {
-      document.addEventListener('click', onDocClick);
+      window.setTimeout(() => {
+        const onDocClick = (e: MouseEvent) => {
+          if (!this.isCardOpen || !this.host) return;
+          const path = e.composedPath ? e.composedPath() : [];
+          if (!path.includes(this.host)) {
+            this.isCardOpen = false;
+            this.render();
+            document.removeEventListener('click', onDocClick);
+          }
+        };
+        document.addEventListener('click', onDocClick);
+      }, 50);
     }
   }
 
@@ -345,8 +358,14 @@ export class QuotaMonitor {
         --red-bg: #FEF2F2;
         --red-border: #FECACA;
         --bg-panel: rgba(255, 255, 255, 0.98);
-        --shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.12), 0 2px 6px -1px rgba(0, 0, 0, 0.08);
-        all: initial;
+        --shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.15), 0 2px 6px -1px rgba(0, 0, 0, 0.08);
+
+        display: block !important;
+        position: fixed !important;
+        top: 12px !important;
+        right: 110px !important;
+        z-index: 99999 !important;
+        pointer-events: auto !important;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans SC", sans-serif;
       }
 
@@ -370,17 +389,11 @@ export class QuotaMonitor {
         --shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.5), 0 2px 6px -1px rgba(0, 0, 0, 0.4);
       }
 
-      :host:not(.in-header) .quota-root {
-        position: fixed;
-        top: 14px;
-        right: 140px;
-        z-index: 99998;
-      }
-
-      .in-header {
+      .quota-root {
+        position: relative;
         display: inline-flex;
         align-items: center;
-        margin-right: 12px;
+        pointer-events: auto;
       }
 
       .quota-container {
@@ -393,20 +406,23 @@ export class QuotaMonitor {
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        padding: 5px 10px;
+        padding: 5px 12px;
         border-radius: 16px;
         font-size: 12.5px;
         font-weight: 600;
-        cursor: pointer;
+        cursor: pointer !important;
         background: var(--paper);
         border: 1px solid var(--hair);
         color: var(--ink);
-        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
         transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+        outline: none;
+        user-select: none;
+        pointer-events: auto !important;
       }
       .quota-pill:hover {
         transform: translateY(-1px);
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
       }
 
       .quota-pill.status-ok {
@@ -436,6 +452,10 @@ export class QuotaMonitor {
         background: rgba(0, 0, 0, 0.08);
         overflow: hidden;
       }
+      :host([data-theme="dark"]) .pill-bar-track {
+        background: rgba(255, 255, 255, 0.12);
+      }
+
       .pill-bar-fill {
         height: 100%;
         border-radius: 3px;
@@ -459,7 +479,7 @@ export class QuotaMonitor {
         position: absolute;
         top: calc(100% + 8px);
         right: 0;
-        width: 290px;
+        width: 310px;
         background: var(--bg-panel);
         border: 1px solid var(--hair);
         border-radius: 12px;
@@ -468,6 +488,7 @@ export class QuotaMonitor {
         z-index: 100000;
         overflow: hidden;
         animation: fadeIn 0.15s ease-out;
+        pointer-events: auto !important;
       }
 
       @keyframes fadeIn {
@@ -519,7 +540,7 @@ export class QuotaMonitor {
         margin-bottom: 8px;
       }
       .metric-num {
-        font-size: 32px;
+        font-size: 26px;
         font-weight: 800;
         line-height: 1;
       }
@@ -528,30 +549,44 @@ export class QuotaMonitor {
       .metric-num.status-danger, .metric-num.status-rate_limited { color: var(--red); }
 
       .metric-meta {
-        text-align: right;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 2px;
       }
       .metric-label {
-        font-size: 11px;
+        font-size: 11.5px;
         color: var(--mute);
-        display: block;
       }
       .metric-status-badge {
         font-size: 11px;
         font-weight: 600;
-        padding: 2px 6px;
-        border-radius: 4px;
+        padding: 2px 7px;
+        border-radius: 10px;
       }
-      .metric-status-badge.status-ok { background: var(--emerald-bg); color: var(--emerald); }
-      .metric-status-badge.status-warning { background: var(--amber-bg); color: var(--amber); }
-      .metric-status-badge.status-danger, .metric-status-badge.status-rate_limited { background: var(--red-bg); color: var(--red); }
+      .metric-status-badge.status-ok {
+        background: var(--emerald-bg);
+        color: var(--emerald);
+      }
+      .metric-status-badge.status-warning {
+        background: var(--amber-bg);
+        color: var(--amber);
+      }
+      .metric-status-badge.status-danger, .metric-status-badge.status-rate_limited {
+        background: var(--red-bg);
+        color: var(--red);
+      }
 
       .progress-track {
         width: 100%;
-        height: 8px;
+        height: 7px;
+        background: rgba(0, 0, 0, 0.08);
         border-radius: 4px;
-        background: var(--hair);
         overflow: hidden;
         margin-bottom: 12px;
+      }
+      :host([data-theme="dark"]) .progress-track {
+        background: rgba(255, 255, 255, 0.12);
       }
       .progress-fill {
         height: 100%;
@@ -566,54 +601,58 @@ export class QuotaMonitor {
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 8px;
-        background: var(--paper);
-        border: 1px solid var(--hair);
-        border-radius: 8px;
-        padding: 8px 10px;
+        padding-top: 10px;
+        border-top: 1px solid var(--hair);
       }
       .stat-item {
         display: flex;
         flex-direction: column;
+        gap: 2px;
       }
       .stat-label {
         font-size: 11px;
         color: var(--mute);
       }
       .stat-value {
-        font-size: 12px;
+        font-size: 12.5px;
         font-weight: 600;
         color: var(--ink);
       }
 
       .error-notice {
         margin-top: 10px;
-        font-size: 11.5px;
-        color: var(--red);
-        background: var(--red-bg);
-        padding: 6px 8px;
+        padding: 6px 10px;
+        background: var(--amber-bg);
+        border: 1px solid var(--amber-border);
         border-radius: 6px;
-        border: 1px solid var(--red-border);
+        color: var(--amber);
+        font-size: 11.5px;
+        line-height: 1.4;
       }
 
       .card-footer {
         padding: 10px 14px;
-        border-top: 1px solid var(--hair);
         display: flex;
         justify-content: space-between;
         align-items: center;
+        background: rgba(0, 0, 0, 0.02);
+        border-top: 1px solid var(--hair);
       }
+      :host([data-theme="dark"]) .card-footer {
+        background: rgba(255, 255, 255, 0.02);
+      }
+
       .refresh-btn {
-        background: var(--paper);
-        border: 1px solid var(--hair);
-        color: var(--ink);
-        padding: 5px 10px;
-        border-radius: 6px;
-        font-size: 12px;
-        font-weight: 600;
-        cursor: pointer;
         display: inline-flex;
         align-items: center;
         gap: 4px;
+        padding: 4px 10px;
+        background: var(--paper);
+        border: 1px solid var(--hair);
+        border-radius: 6px;
+        color: var(--ink);
+        font-size: 12px;
+        cursor: pointer;
         transition: background 0.15s, border-color 0.15s;
       }
       .refresh-btn:hover {
@@ -625,36 +664,36 @@ export class QuotaMonitor {
       }
       .refresh-icon.spin {
         animation: spin 0.8s linear infinite;
-        display: inline-block;
-      }
-
-      @keyframes spin {
-        from { transform: rotate(0deg); }
-        to { transform: rotate(360deg); }
       }
 
       .link-usage {
         font-size: 12px;
         color: var(--accent);
         text-decoration: none;
+        font-weight: 500;
       }
       .link-usage:hover {
         text-decoration: underline;
       }
 
       .shortcut-tip {
+        padding: 6px 14px;
         font-size: 11px;
         color: var(--mute);
-        text-align: center;
-        padding: 4px 0 8px;
-        background: var(--paper);
+        background: rgba(0, 0, 0, 0.015);
         border-top: 1px dashed var(--hair);
+        text-align: center;
       }
       .shortcut-tip code {
-        background: var(--hair);
+        font-family: monospace;
+        background: rgba(0, 0, 0, 0.06);
         padding: 1px 4px;
         border-radius: 3px;
-        font-size: 10px;
+      }
+
+      @keyframes spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
       }
     `;
   }

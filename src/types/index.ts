@@ -30,6 +30,8 @@ export interface QuotaData {
   periodType?: 'current' | 'weekly' | 'daily';
   weeklyUsed?: number;
   weeklyTotal?: number;
+  weeklyPercentage?: number;
+  weeklyResetTimeText?: string;
   status: QuotaStatus;
   lastUpdated: number;
   errorMessage?: string;
