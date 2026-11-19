@@ -150,24 +150,20 @@ async function fetchQuota(force = false): Promise<QuotaData> {
       // If direct fetch couldn't extract rendered percentage (SPA client-side rendered),
       // prefer existing cached quota rather than overwriting with 0!
       const cached = await StorageManager.getCachedQuota();
-      if (cached && cached.percentage > 0) {
+      if (cached) {
         updateBadge(cached);
         return cached;
       }
 
-      // Default fallback
-      const defaultQuota: QuotaData = {
-        percentage: parsed.percentage ?? 0,
-        resetTimeText: parsed.resetTimeText || '今日结束前重置',
-        weeklyPercentage: parsed.weeklyPercentage,
-        weeklyResetTimeText: parsed.weeklyResetTimeText,
+      // Default initial quota when no cache exists yet
+      const initialQuota: QuotaData = {
+        percentage: 0,
+        resetTimeText: '点击刷新以同步',
         periodType: 'current',
         status: 'ok',
         lastUpdated: Date.now()
       };
-      await StorageManager.saveQuota(defaultQuota);
-      updateBadge(defaultQuota);
-      return defaultQuota;
+      return initialQuota;
     } catch (err: any) {
       console.warn('[Gemini Copilot SW] Quota fetch failed:', err);
       const cached = await StorageManager.getCachedQuota();

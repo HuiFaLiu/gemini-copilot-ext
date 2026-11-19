@@ -1,7 +1,7 @@
 /**
  * Gemini Copilot - Feature: Real-time Quota Monitor Capsule (P0)
  * 
- * Adaptive top-bar pill, tri-color threshold alerts, details card,
+ * Adaptive bottom-left pill, upward-expanding details card, tri-color threshold alerts,
  * Alt+U toggle, and hybrid refresh engine (events + smart polling + iframe degraded fallback).
  */
 import { QuotaData, ExtensionSettings } from '../../types';
@@ -133,8 +133,8 @@ export class QuotaMonitor {
       if (res.success && res.data && res.data.percentage > 0) {
         this.quota = res.data;
       } else {
-        // 2. If background returned 0% or failed (due to SPA client-side rendering),
-        // execute degraded hidden iframe channel to extract real rendered DOM cards!
+        // 2. If background returned 0% or couldn't parse live DOM,
+        // use hidden iframe degraded reader to extract rendered DOM cards from /usage
         const iframeQuota = await IframeQuotaFetcher.fetch();
         if (iframeQuota && iframeQuota.percentage !== undefined) {
           this.quota = iframeQuota;
@@ -188,10 +188,10 @@ export class QuotaMonitor {
 
     root.innerHTML = `
       <div class="quota-container">
-        <!-- Main Top Bar Capsule Pill -->
+        <!-- Main Bottom-Left Capsule Pill -->
         <button class="quota-pill ${statusClass} ${this.isRefreshing ? 'refreshing' : ''}" 
                 type="button"
-                title="Gemini 限额用量: ${pct}% (点击展开明细卡片，快捷键 Alt+U 切换显隐)">
+                title="Gemini 限额用量: ${pct}% (点击向上展开明细卡片，快捷键 Alt+U 显隐)">
           <span class="pill-sparkle">✦</span>
           <span class="pill-text">${pct}% 用量</span>
           <div class="pill-bar-track">
@@ -200,7 +200,7 @@ export class QuotaMonitor {
           ${this.isRefreshing ? '<span class="pill-spinner"></span>' : ''}
         </button>
 
-        <!-- Popover Details Card -->
+        <!-- Upward-Expanding Details Card -->
         ${
           this.isCardOpen
             ? `
@@ -234,7 +234,7 @@ export class QuotaMonitor {
               <div class="stats-grid">
                 <div class="stat-item">
                   <span class="stat-label">今日重置</span>
-                  <span class="stat-value">${this.quota?.resetTimeText || '周期自动重置'}</span>
+                  <span class="stat-value">${this.quota?.resetTimeText || '今日定时重置'}</span>
                 </div>
                 ${
                   this.quota?.weeklyPercentage !== undefined
@@ -358,12 +358,14 @@ export class QuotaMonitor {
         --red-bg: #FEF2F2;
         --red-border: #FECACA;
         --bg-panel: rgba(255, 255, 255, 0.98);
-        --shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.15), 0 2px 6px -1px rgba(0, 0, 0, 0.08);
+        --shadow: 0 10px 32px rgba(0, 0, 0, 0.16), 0 2px 8px rgba(0, 0, 0, 0.08);
 
         display: block !important;
         position: fixed !important;
-        top: 12px !important;
-        right: 110px !important;
+        bottom: 20px !important;
+        left: 20px !important;
+        top: auto !important;
+        right: auto !important;
         z-index: 99999 !important;
         pointer-events: auto !important;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans SC", sans-serif;
@@ -386,7 +388,7 @@ export class QuotaMonitor {
         --red-bg: rgba(239, 68, 68, 0.15);
         --red-border: rgba(239, 68, 68, 0.3);
         --bg-panel: rgba(24, 25, 27, 0.98);
-        --shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.5), 0 2px 6px -1px rgba(0, 0, 0, 0.4);
+        --shadow: 0 10px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
       }
 
       .quota-root {
@@ -406,23 +408,23 @@ export class QuotaMonitor {
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        padding: 5px 12px;
-        border-radius: 16px;
+        padding: 6px 13px;
+        border-radius: 20px;
         font-size: 12.5px;
         font-weight: 600;
         cursor: pointer !important;
         background: var(--paper);
         border: 1px solid var(--hair);
         color: var(--ink);
-        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
         transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
         outline: none;
         user-select: none;
         pointer-events: auto !important;
       }
       .quota-pill:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
       }
 
       .quota-pill.status-ok {
@@ -474,12 +476,15 @@ export class QuotaMonitor {
         animation: spin 0.6s linear infinite;
       }
 
-      /* Details Card */
+      /* Details Card - Expands Upwards from bottom */
       .quota-card {
         position: absolute;
-        top: calc(100% + 8px);
-        right: 0;
+        bottom: calc(100% + 10px);
+        left: 0;
+        top: auto;
+        right: auto;
         width: 310px;
+        max-height: 80vh;
         background: var(--bg-panel);
         border: 1px solid var(--hair);
         border-radius: 12px;
@@ -487,13 +492,19 @@ export class QuotaMonitor {
         backdrop-filter: blur(12px);
         z-index: 100000;
         overflow: hidden;
-        animation: fadeIn 0.15s ease-out;
+        animation: slideUpFadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
         pointer-events: auto !important;
       }
 
-      @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(-4px); }
-        to { opacity: 1; transform: translateY(0); }
+      @keyframes slideUpFadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(8px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
       }
 
       .card-header {
@@ -614,7 +625,7 @@ export class QuotaMonitor {
         color: var(--mute);
       }
       .stat-value {
-        font-size: 12.5px;
+        font-size: 12px;
         font-weight: 600;
         color: var(--ink);
       }

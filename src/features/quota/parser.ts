@@ -8,18 +8,35 @@
  */
 import { QuotaData, QuotaStatus } from '../../types';
 
-export function parseUsageText(text: string): Partial<QuotaData> {
+function stripHtml(input: string): string {
+  if (!input) return '';
+  return input
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractResetTime(text: string): string | null {
+  // Must NOT match "counter-reset" or CSS property values
+  const match = text.match(/(?:(?<!counter-)重置时间|将于|Resets?\s+(?:at|in))[:：\s]*([0-9]{1,2}月[0-9]{1,2}日\s*[0-9]{1,2}:[0-9]{2}|[0-9]{1,2}:[0-9]{2}(?:\s*[AP]M)?|[0-9]+\s*(?:hours?|mins?|分|小时|天)[^\n\r<]{0,12})/i);
+  return match ? match[1].trim() : null;
+}
+
+export function parseUsageText(rawInput: string): Partial<QuotaData> {
   const result: Partial<QuotaData> = {
     periodType: 'current'
   };
 
   try {
-    if (!text || text.trim().length === 0) {
+    const text = stripHtml(rawInput);
+    if (!text || text.length === 0) {
       return result;
     }
 
     // 1. Current / Daily Quota
-    // Split text into section for "当前用量"
     const currentSectionMatch = text.match(/(?:当前用量|Current\s*usage)[\s\S]*?(?=(?:每周限额|Weekly\s*limit)|方案|$)/i);
     const currentText = currentSectionMatch ? currentSectionMatch[0] : text;
 
@@ -35,11 +52,10 @@ export function parseUsageText(text: string): Partial<QuotaData> {
       }
     }
 
-    // Match reset time in currentText: "重置时间：20:21", "重置时间: 20:21", "Resets at: 20:21"
-    const currentResetMatch = currentText.match(/(?:重置时间|Resets?(?:\s*at|\s*in)?)[:：\s]*([0-9]{1,2}:[0-9]{2}(?:\s*[AP]M)?)/i) ||
-                              currentText.match(/(?:重置时间|Resets?(?:\s*at|\s*in)?)[:：\s]*([^\n\r]+)/i);
-    if (currentResetMatch && currentResetMatch[1]) {
-      result.resetTimeText = `重置时间：${currentResetMatch[1].trim()}`;
+    // Match reset time in currentText
+    const currentReset = extractResetTime(currentText) || extractResetTime(text);
+    if (currentReset) {
+      result.resetTimeText = `重置时间：${currentReset}`;
     }
 
     // 2. Weekly Quota (每周限额)
@@ -52,9 +68,9 @@ export function parseUsageText(text: string): Partial<QuotaData> {
         result.weeklyPercentage = parseFloat(weeklyPctMatch[1]);
       }
 
-      const weeklyResetMatch = weeklyText.match(/(?:重置时间|Resets?(?:\s*at|\s*in)?)[:：\s]*([^\n\r]+)/i);
-      if (weeklyResetMatch && weeklyResetMatch[1]) {
-        result.weeklyResetTimeText = `每周重置：${weeklyResetMatch[1].trim()}`;
+      const weeklyReset = extractResetTime(weeklyText);
+      if (weeklyReset) {
+        result.weeklyResetTimeText = `每周重置：${weeklyReset}`;
       }
     }
 
