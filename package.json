@@ -1,0 +1,17 @@
+{
+  "name": "gemini-copilot-ext",
+  "version": "1.0.0",
+  "description": "Chrome Manifest V3 Extension for Gemini Web: Timeline Navigator, Quota Monitor, Composer Tools and Exporter",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "icons": "node scripts/generate-icons.js",
+    "build": "node scripts/build.js",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.280",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}

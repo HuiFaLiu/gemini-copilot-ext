@@ -1,0 +1,52 @@
+{
+  "manifest_version": 3,
+  "name": "Gemini Copilot - 对话导航与用量监控增强套件",
+  "version": "1.0.0",
+  "description": "网页端 Gemini 浏览器增强套件：提供对话时间轴导航、实时用量限额胶囊、草稿自动保存、Markdown 导出与公式复制等功能。",
+  "permissions": [
+    "storage",
+    "declarativeNetRequest",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://gemini.google.com/*"
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "ruleset_usage",
+        "enabled": true,
+        "path": "rules/usage_dnr.json"
+      }
+    ]
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://gemini.google.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_end"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Gemini Copilot 设置",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

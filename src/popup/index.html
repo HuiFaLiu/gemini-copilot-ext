@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gemini Copilot 设置与管理</title>
+  <style>
+    :root {
+      --paper: #FFFFFF;
+      --band: #F9FAFB;
+      --ink: #111827;
+      --ink2: #374151;
+      --mute: #6B7280;
+      --hair: #E5E7EB;
+      --accent: #1D4ED8;
+      --accent-bg: #EFF6FF;
+      --emerald: #047857;
+      --emerald-bg: #ECFDF5;
+      --amber: #D97706;
+      --amber-bg: #FFFBEB;
+      --red: #DC2626;
+      --red-bg: #FEF2F2;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 360px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans SC", sans-serif;
+      background: var(--paper);
+      color: var(--ink);
+      font-size: 13.5px;
+      line-height: 1.5;
+    }
+
+    /* Header */
+    header {
+      padding: 14px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--hair);
+      background: var(--band);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .brand-icon {
+      width: 22px;
+      height: 22px;
+    }
+    .brand-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--ink);
+    }
+    .version-tag {
+      font-size: 11px;
+      color: var(--mute);
+      background: var(--hair);
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+
+    /* Quota Card */
+    .quota-box {
+      margin: 14px 16px;
+      padding: 12px 14px;
+      border: 1px solid var(--hair);
+      border-radius: 10px;
+      background: var(--paper);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    }
+    .quota-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .quota-title {
+      font-size: 12.5px;
+      font-weight: 700;
+      color: var(--ink2);
+    }
+    .status-badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .status-badge.status-ok { background: var(--emerald-bg); color: var(--emerald); }
+    .status-badge.status-warning { background: var(--amber-bg); color: var(--amber); }
+    .status-badge.status-danger { background: var(--red-bg); color: var(--red); }
+    .status-badge.status-rate_limited { background: var(--red-bg); color: var(--red); }
+
+    .quota-metric {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .metric-value {
+      font-size: 26px;
+      font-weight: 800;
+      color: var(--ink);
+      line-height: 1;
+    }
+    .metric-unit {
+      font-size: 12px;
+      color: var(--mute);
+    }
+
+    .progress-track {
+      width: 100%;
+      height: 6px;
+      border-radius: 3px;
+      background: var(--hair);
+      overflow: hidden;
+      margin-bottom: 8px;
+    }
+    .progress-bar {
+      height: 100%;
+      border-radius: 3px;
+      background: var(--accent);
+      transition: width 0.3s;
+    }
+    .progress-bar.status-ok { background: var(--emerald); }
+    .progress-bar.status-warning { background: var(--amber); }
+    .progress-bar.status-danger { background: var(--red); }
+
+    .quota-meta {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11.5px;
+      color: var(--mute);
+    }
+
+    /* Section & Switches */
+    .section-title {
+      padding: 10px 16px 4px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--mute);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .settings-list {
+      padding: 4px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .setting-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 4px 0;
+    }
+    .setting-info {
+      display: flex;
+      flex-direction: column;
+      padding-right: 12px;
+    }
+    .setting-label {
+      font-size: 13.5px;
+      font-weight: 600;
+      color: var(--ink);
+    }
+    .setting-desc {
+      font-size: 11.5px;
+      color: var(--mute);
+      line-height: 1.35;
+    }
+
+    /* Switch toggle */
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 36px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #D1D5DB;
+      transition: 0.2s;
+      border-radius: 20px;
+    }
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 14px;
+      width: 14px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: 0.2s;
+      border-radius: 50%;
+    }
+    input:checked + .slider {
+      background-color: var(--accent);
+    }
+    input:checked + .slider:before {
+      transform: translateX(16px);
+    }
+
+    /* Interval Slider */
+    .interval-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .interval-slider {
+      flex: 1;
+      cursor: pointer;
+    }
+    .interval-badge {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--accent);
+      min-width: 32px;
+      text-align: right;
+    }
+
+    /* Export buttons */
+    .action-group {
+      padding: 12px 16px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .btn-action {
+      background: var(--band);
+      border: 1px solid var(--hair);
+      color: var(--ink2);
+      padding: 7px 10px;
+      border-radius: 6px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+    .btn-action:hover {
+      background: var(--accent-bg);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    /* Footer */
+    footer {
+      padding: 12px 16px;
+      border-top: 1px solid var(--hair);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11.5px;
+      color: var(--mute);
+      background: var(--band);
+    }
+    footer a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    footer a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <img src="/icons/icon48.png" alt="Gemini Copilot" class="brand-icon">
+      <span class="brand-title">Gemini Copilot</span>
+    </div>
+    <span class="version-tag">v1.0.0</span>
+  </header>
+
+  <!-- Live Quota Overview Card -->
+  <div class="quota-box">
+    <div class="quota-top">
+      <span class="quota-title">实时用量限额</span>
+      <span class="status-badge status-ok" id="statusBadge">计算中...</span>
+    </div>
+    <div class="quota-metric">
+      <span class="metric-value" id="quotaPct">--%</span>
+      <span class="metric-unit">已消耗</span>
+    </div>
+    <div class="progress-track">
+      <div class="progress-bar status-ok" id="progressBar" style="width: 0%;"></div>
+    </div>
+    <div class="quota-meta">
+      <span id="quotaResetText">重置: 载入中...</span>
+      <span id="quotaUpdatedText">更新: --</span>
+    </div>
+  </div>
+
+  <!-- Feature Settings -->
+  <div class="section-title">核心功能开关</div>
+  <div class="settings-list">
+    <!-- Timeline Navigation -->
+    <div class="setting-item">
+      <div class="setting-info">
+        <span class="setting-label">对话内时间轴导航</span>
+        <span class="setting-desc">右侧悬浮圆点轨道、悬浮摘要与关键词过滤</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="toggleTimeline" checked>
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <!-- Top Bar Quota Pill -->
+    <div class="setting-item">
+      <div class="setting-info">
+        <span class="setting-label">顶栏限额胶囊</span>
+        <span class="setting-desc">顶栏实时显示用量进度与重置倒计时 (Alt+U)</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="toggleQuotaPill" checked>
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <!-- Draft Auto-Save -->
+    <div class="setting-item">
+      <div class="setting-info">
+        <span class="setting-label">会话草稿自动防丢</span>
+        <span class="setting-desc">按会话保存未发送输入，防止误刷新丢失内容</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="toggleDraft" checked>
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <!-- Send Key Mode -->
+    <div class="setting-item">
+      <div class="setting-info">
+        <span class="setting-label">Ctrl/Cmd+Enter 发送</span>
+        <span class="setting-desc">单按 Enter 仅换行，组合键发送防误触</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="toggleSendKey">
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <!-- LaTeX Click-to-copy -->
+    <div class="setting-item">
+      <div class="setting-info">
+        <span class="setting-label">LaTeX 公式点击复制</span>
+        <span class="setting-desc">点击公式即复制源码至剪贴板</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="toggleLatex" checked>
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <!-- Widescreen Mode -->
+    <div class="setting-item">
+      <div class="setting-info">
+        <span class="setting-label">宽屏浏览模式</span>
+        <span class="setting-desc">拓宽对话流居中宽度至 1200px 减少留白</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="toggleWidescreen">
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <!-- Refresh Interval Slider -->
+    <div class="setting-item" style="flex-direction: column; align-items: stretch;">
+      <div class="setting-info">
+        <span class="setting-label">活跃页安全轮询间隔</span>
+        <span class="setting-desc">仅在活跃前台标签页生效（下限 15s）</span>
+      </div>
+      <div class="interval-row">
+        <input type="range" id="sliderInterval" class="interval-slider" min="15" max="180" step="5" value="45">
+        <span class="interval-badge" id="intervalValue">45s</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Conversation Export Toolbar -->
+  <div class="section-title">当前会话导出</div>
+  <div class="action-group">
+    <button class="btn-action" id="btnExportMarkdown">
+      <span>📝 导出 Markdown</span>
+    </button>
+    <button class="btn-action" id="btnExportJSON">
+      <span>📦 导出 JSON</span>
+    </button>
+  </div>
+
+  <footer>
+    <a href="https://gemini.google.com/usage" target="_blank">打开官方用量页 &rarr;</a>
+    <span>MV3 沙箱驱动</span>
+  </footer>
+
+  <script type="module" src="./popup.ts"></script>
+</body>
+</html>
